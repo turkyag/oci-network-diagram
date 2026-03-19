@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ReactFlow,
   MiniMap,
@@ -10,6 +10,7 @@ import {
   type Node,
   type Edge,
   type NodeMouseHandler,
+  type NodeDragHandler,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Network, AlertTriangle } from 'lucide-react';
@@ -115,6 +116,47 @@ export function DiagramCanvas({
     [onNodeClick]
   );
 
+  // Track compartment drag to move all member nodes together
+  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
+
+  const handleNodeDragStart: NodeDragHandler = useCallback((_, node) => {
+    if (node.type === 'compartment') {
+      dragStartPos.current = { x: node.position.x, y: node.position.y };
+    }
+  }, []);
+
+  const handleNodeDragStop: NodeDragHandler = useCallback((_, node) => {
+    if (node.type !== 'compartment' || !dragStartPos.current) return;
+
+    const dx = node.position.x - dragStartPos.current.x;
+    const dy = node.position.y - dragStartPos.current.y;
+    dragStartPos.current = null;
+
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+
+    // Find the compartment's compartment_id
+    const compId = (node.data as Record<string, unknown>)?.resource_id as string;
+    if (!compId) return;
+
+    // Move all non-child, non-compartment nodes that belong to this compartment
+    setNodes((prev) =>
+      prev.map((n) => {
+        if (n.id === node.id) return n; // compartment itself already moved
+        if (n.type === 'compartment' || n.type === 'external') return n;
+        if (n.parentId) return n; // child nodes move with parent VCN
+
+        const props = (n.data as Record<string, unknown>)?.properties as Record<string, unknown> | undefined;
+        const nodeCompId = props?.compartment_id as string;
+        if (nodeCompId !== compId) return n;
+
+        return {
+          ...n,
+          position: { x: n.position.x + dx, y: n.position.y + dy },
+        };
+      })
+    );
+  }, [setNodes]);
+
   const fitViewOptions = useMemo(
     () => ({ padding: 0.15, duration: 400 }),
     []
@@ -178,6 +220,8 @@ export function DiagramCanvas({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onNodeDragStart={handleNodeDragStart}
+        onNodeDragStop={handleNodeDragStop}
         onPaneClick={onPaneClick}
         onViewportChange={onViewportChange}
         nodeTypes={nodeTypes}

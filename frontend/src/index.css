@@ -1063,7 +1063,6 @@ code, .mono {
   border: 1px solid rgba(71, 85, 105, 0.22);
   border-radius: 8px;
   background: none;
-  pointer-events: none;
 }
 
 /* Subtle inner edge highlight — just the corners feel defined */

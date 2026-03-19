@@ -492,7 +492,7 @@ def build_compartments(topo, nodes, vp):
             },
             "style": {"width": comp_w, "height": comp_h, "zIndex": -1},
             "selectable": True,
-            "draggable": False,
+            "draggable": True,
         })
         compartment_positions[comp_id] = {"x": min_x, "y": min_y, "width": comp_w, "height": comp_h}
 
