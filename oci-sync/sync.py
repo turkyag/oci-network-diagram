@@ -116,6 +116,9 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
     # Build VCN → compartment map for VCN-scoped queries
     vcn_comp = {v.id: v.compartment_id for v in vcns}
 
+    # Throttle between resource types to avoid rate limiting
+    THROTTLE = 0.5  # seconds between resource type fetches
+
     print("  Fetching Subnets...")
     for vcn_id in vcn_ids:
         cid = vcn_comp.get(vcn_id, compartment_id)
@@ -368,14 +371,33 @@ def _extract_items(data):
     return [data]
 
 
+def _call_with_retry(fn, *args, max_retries=5, **kwargs):
+    """Call an OCI API function with retry on 429/transient errors."""
+    # Small base delay to avoid burst rate limits
+    time.sleep(0.15)
+    for attempt in range(max_retries):
+        try:
+            return fn(*args, **kwargs)
+        except (oci.exceptions.TransientServiceError, oci.exceptions.ServiceError) as e:
+            status = getattr(e, "status", 0)
+            if status == 429 or isinstance(e, oci.exceptions.TransientServiceError):
+                wait = min(2 ** attempt + 1, 30)
+                print(f"    Rate limited, retrying in {wait}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            raise
+    # Last attempt without catch
+    return fn(*args, **kwargs)
+
+
 def _list_all(list_fn, *args, **kwargs):
-    """Call an OCI list function and handle pagination."""
+    """Call an OCI list function with pagination and rate-limit retry."""
     items = []
     try:
-        response = list_fn(*args, **kwargs)
+        response = _call_with_retry(list_fn, *args, **kwargs)
         items.extend(_extract_items(response.data))
         while response.has_next_page:
-            response = list_fn(*args, page=response.next_page, **kwargs)
+            response = _call_with_retry(list_fn, *args, page=response.next_page, **kwargs)
             items.extend(_extract_items(response.data))
     except oci.exceptions.ServiceError as e:
         if e.status in (404, 400):
