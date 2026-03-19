@@ -148,6 +148,7 @@ class SqlTopologyRepository(TopologyRepository):
             if model:
                 model.name = topology.name
                 model.description = topology.description
+                model.metadata_json = topology.metadata_json
                 model.updated_at = datetime.utcnow()
             else:
                 model = TopologyModel(
@@ -251,6 +252,7 @@ class SqlTopologyRepository(TopologyRepository):
             id=m.id,
             name=m.name,
             description=m.description,
+            metadata_json=m.metadata_json,
             created_at=m.created_at,
             updated_at=m.updated_at,
             vcns=[self._vcn_to_entity(v) for v in m.vcns],

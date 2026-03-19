@@ -24,9 +24,19 @@ import oci
 # OCI data fetching
 # ---------------------------------------------------------------------------
 
-def _get_all_compartment_ids(config: dict, tenancy_id: str, root_compartment_id: str) -> list[str]:
-    """Recursively list all compartments under the given root (including the root itself)."""
+def _discover_compartments(config: dict, tenancy_id: str, root_compartment_id: str) -> tuple[list[str], dict[str, dict]]:
+    """Recursively list all compartments. Returns (list of IDs, map of ID → {name, parent_id})."""
     identity = oci.identity.IdentityClient(config)
+
+    # Root compartment (tenancy)
+    comp_map: dict[str, dict] = {}
+    try:
+        tenancy = identity.get_tenancy(tenancy_id).data
+        root_name = tenancy.name or "Tenancy"
+    except Exception:
+        root_name = "Root"
+    comp_map[root_compartment_id] = {"name": root_name, "parent_id": ""}
+
     all_ids = [root_compartment_id]
 
     try:
@@ -38,10 +48,15 @@ def _get_all_compartment_ids(config: dict, tenancy_id: str, root_compartment_id:
         for c in compartments:
             if getattr(c, "lifecycle_state", "") == "ACTIVE":
                 all_ids.append(c.id)
+                comp_map[c.id] = {
+                    "name": c.name or c.id[-8:],
+                    "parent_id": c.compartment_id or root_compartment_id,
+                }
+                print(f"    {c.name} ({c.id[-12:]}...)")
     except oci.exceptions.ServiceError as e:
         print(f"  Warning: Could not list sub-compartments: {e.message[:80]}")
 
-    return all_ids
+    return all_ids, comp_map
 
 
 def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
@@ -50,7 +65,7 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
 
     # Discover all compartments (root + children recursively)
     print("  Discovering compartments...")
-    compartment_ids = _get_all_compartment_ids(config, tenancy_id, compartment_id)
+    compartment_ids, comp_map = _discover_compartments(config, tenancy_id, compartment_id)
     print(f"  Found {len(compartment_ids)} compartment(s)")
 
     vn_client = oci.core.VirtualNetworkClient(config)
@@ -304,6 +319,9 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
                 ))
         except oci.exceptions.ServiceError:
             pass
+
+    # Include compartment metadata for the diagram
+    payload["_compartment_map"] = comp_map
 
     return payload
 

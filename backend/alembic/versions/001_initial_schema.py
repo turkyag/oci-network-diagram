@@ -21,6 +21,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("description", sa.Text(), server_default=""),
+        sa.Column("metadata_json", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(), server_default=sa.func.now()),
         sa.PrimaryKeyConstraint("id"),

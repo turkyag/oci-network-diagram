@@ -134,3 +134,6 @@ class ImportRequest(BaseModel):
     cross_connects: list[dict[str, Any]] = Field(default_factory=list)
     virtual_circuits: list[dict[str, Any]] = Field(default_factory=list)
     drg_route_distributions: list[dict[str, Any]] = Field(default_factory=list)
+    compartment_map: dict[str, Any] | None = Field(default=None, alias="_compartment_map")
+
+    model_config = {"populate_by_name": True}

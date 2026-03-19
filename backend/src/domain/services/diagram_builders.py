@@ -12,12 +12,24 @@ FLOW_COLORS = {"IGW": "#22c55e", "NAT": "#f59e0b", "DRG": "#3b82f6",
                 "SGW": "#8b5cf6", "LPG": "#6366f1"}
 
 
+_COMP_MAP: dict[str, dict] = {}
+
+def _set_comp_map(topo) -> None:
+    """Initialize compartment name lookup from topology metadata."""
+    global _COMP_MAP
+    _COMP_MAP = {}
+    if topo.metadata_json and isinstance(topo.metadata_json, dict):
+        _COMP_MAP = topo.metadata_json.get("compartment_map", {})
+
 def _comp_name(comp_id: str) -> str:
     if not comp_id:
         return ""
+    meta = _COMP_MAP.get(comp_id, {})
+    if meta.get("name"):
+        return meta["name"]
     if ".tenancy." in comp_id:
-        return "Root Compartment (Tenancy)"
-    return f"Compartment (...{comp_id[-8:]})"
+        return "Root (Tenancy)"
+    return comp_id
 
 
 def edge(eid, src, tgt, label, stroke, animated=False, dashed=False,
@@ -355,12 +367,16 @@ def build_load_balancers(topo, nodes, edges, vp):
 
 
 def build_compartments(topo, nodes, vp):
-    """Build compartment container nodes that wrap ALL OCI resources.
-    Scans every existing node (except externals and other compartments)
-    to compute the bounding box. Compartments are positioned as background
-    containers (zIndex: -1) behind everything."""
+    """Build compartment container nodes using real names from metadata.
+    Each compartment with resources gets its own boundary box.
+    Uses topology.metadata_json.compartment_map for display names."""
 
-    # Collect compartment IDs from top-level resources
+    # Get compartment name map from metadata
+    comp_map = {}
+    if topo.metadata_json and isinstance(topo.metadata_json, dict):
+        comp_map = topo.metadata_json.get("compartment_map", {})
+
+    # Collect compartment IDs that have resources
     comp_ids: set[str] = set()
     for v in topo.vcns:
         if v.compartment_id:
@@ -372,54 +388,70 @@ def build_compartments(topo, nodes, vp):
     if not comp_ids:
         return {}
 
-    # Compute bounding box from ALL non-external, non-compartment, non-child nodes
-    # This ensures the compartment wraps gateways, DRGs, route tables, LBs, etc.
-    # Estimate rendered width by node type (accounts for text content)
-    WIDTH_ESTIMATES = {
+    # Map each non-external, non-child node to its compartment
+    # VCNs and DRGs have compartment_id. Other nodes inherit from their VCN.
+    vcn_comp = {v.ocid: v.compartment_id for v in topo.vcns}
+    node_to_comp: dict[str, str] = {}
+    for n in nodes:
+        if n["type"] in ("external", "compartment") or n.get("parentId"):
+            continue
+        # Try to find compartment from properties or VCN parent
+        props = n.get("data", {}).get("properties", {})
+        cid = props.get("compartment_id", "")
+        if not cid:
+            # Inherit from first comp_id as fallback
+            cid = next(iter(comp_ids), "")
+        if cid:
+            node_to_comp[n["id"]] = cid
+
+    WIDTH_EST = {
         "vcn": lambda n: n.get("style", {}).get("width", 700),
         "drg": lambda _: 200,
         "drgRouteTable": lambda n: max(220, len(n["data"].get("label", "")) * 6 + 60),
         "routeTable": lambda n: max(180, len(n["data"].get("label", "")) * 6 + 60),
-        "gateway": lambda _: 160,
-        "loadBalancer": lambda _: 180,
-        "connectivity": lambda _: 180,
-        "firewall": lambda _: 180,
-        "lpg": lambda _: 170,
+        "gateway": lambda _: 160, "loadBalancer": lambda _: 180,
+        "connectivity": lambda _: 180, "firewall": lambda _: 180, "lpg": lambda _: 170,
     }
 
-    SKIP_TYPES = {"external", "compartment"}
-    all_positioned = []
+    # Group nodes by compartment
+    comp_nodes: dict[str, list[dict]] = {cid: [] for cid in comp_ids}
     for n in nodes:
-        if n["type"] in SKIP_TYPES:
-            continue
-        if n.get("parentId"):
-            continue
-        pos = n["position"]
-        style = n.get("style", {})
-        estimator = WIDTH_ESTIMATES.get(n["type"], lambda _: 140)
-        w = style.get("width", estimator(n))
-        h = style.get("height", 60)
-        all_positioned.append({"x": pos["x"], "y": pos["y"], "width": w, "height": h})
+        nid = n["id"]
+        if nid in node_to_comp:
+            cid = node_to_comp[nid]
+            if cid in comp_nodes:
+                est = WIDTH_EST.get(n["type"], lambda _: 140)
+                w = n.get("style", {}).get("width", est(n))
+                h = n.get("style", {}).get("height", 60)
+                comp_nodes[cid].append({
+                    "x": n["position"]["x"], "y": n["position"]["y"],
+                    "width": w, "height": h,
+                })
 
-    if not all_positioned:
-        return {}
-
-    PAD_X, PAD_TOP, PAD_BOTTOM = 60, 70, 50
-
+    PAD_X, PAD_TOP, PAD_BOTTOM = 50, 60, 40
     compartment_positions = {}
+
     for comp_id in comp_ids:
-        min_x = min(p["x"] for p in all_positioned) - PAD_X
-        min_y = min(p["y"] for p in all_positioned) - PAD_TOP
-        max_x = max(p["x"] + p["width"] for p in all_positioned) + PAD_X
-        max_y = max(p["y"] + p["height"] for p in all_positioned) + PAD_BOTTOM
+        positioned = comp_nodes.get(comp_id, [])
+        if not positioned:
+            continue
+
+        min_x = min(p["x"] for p in positioned) - PAD_X
+        min_y = min(p["y"] for p in positioned) - PAD_TOP
+        max_x = max(p["x"] + p["width"] for p in positioned) + PAD_X
+        max_y = max(p["y"] + p["height"] for p in positioned) + PAD_BOTTOM
 
         comp_w = max_x - min_x
         comp_h = max_y - min_y
 
-        if ".tenancy." in comp_id:
-            comp_name = "Root Compartment"
-        else:
-            comp_name = f"Compartment ...{comp_id[-8:]}"
+        # Get real name from metadata, fall back to OCID-derived name
+        meta = comp_map.get(comp_id, {})
+        comp_name = meta.get("name", "")
+        if not comp_name:
+            if ".tenancy." in comp_id:
+                comp_name = "Root (Tenancy)"
+            else:
+                comp_name = comp_id
 
         node_id = f"compartment-{comp_id[-12:]}"
         nodes.insert(0, {
@@ -430,7 +462,7 @@ def build_compartments(topo, nodes, vp):
                 "label": comp_name,
                 "resource_type": "compartment",
                 "resource_id": comp_id,
-                "properties": {"compartment_id": comp_id}
+                "properties": {"compartment_id": comp_id, "compartment_name": comp_name}
             },
             "style": {"width": comp_w, "height": comp_h, "zIndex": -1},
             "selectable": True,

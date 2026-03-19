@@ -44,6 +44,7 @@ class Topology:
     id: int | None
     name: str
     description: str
+    metadata_json: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

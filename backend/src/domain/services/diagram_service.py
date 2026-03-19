@@ -7,6 +7,7 @@ from src.domain.services.route_analyzer import RouteAnalyzer
 from src.domain.services.diagram_builders import (
     edge, build_vcns, build_subnets, build_externals, build_gateways,
     build_drgs, build_route_tables, build_load_balancers, build_compartments,
+    _set_comp_map,
     ZONE_EXT_Y, ZONE_BND_Y, ZONE_DRG_Y,
 )
 
@@ -18,6 +19,7 @@ class DiagramService:
         self._analyzer = RouteAnalyzer()
 
     def generate(self, topology: Topology) -> dict:
+        _set_comp_map(topology)
         analysis = self._analyzer.analyze(topology)
         emap = self._analyzer._build_entity_map(topology)
         nodes: list[dict] = []

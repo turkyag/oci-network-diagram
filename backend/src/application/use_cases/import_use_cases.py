@@ -16,7 +16,14 @@ class ImportOCIDataUseCase:
         if not topology:
             return None
 
-        data = request.model_dump()
+        data = request.model_dump(by_alias=True)
+
+        # Extract compartment map metadata before importing resources
+        comp_map = data.pop("_compartment_map", None)
+        if comp_map:
+            topology.metadata_json = {"compartment_map": comp_map}
+            await self._repository.save(topology)
+
         await self._repository.import_topology_data(topology_id, data)
 
         get_use_case = GetTopologyUseCase(self._repository)
