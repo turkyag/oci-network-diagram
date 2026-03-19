@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.DS_Store
+pgdata/
+*.png
+*.jpg
+.playwright-mcp/
+
+# OCI credentials (never commit)
+oci-config
+oci-key.pem
+*.pem
+config
