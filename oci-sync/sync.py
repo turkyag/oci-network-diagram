@@ -629,7 +629,7 @@ def main() -> None:
     topo_name = args.name or f"oci-{region}"
     with httpx.Client(timeout=30.0) as client:
         print(f"Creating topology '{topo_name}'...")
-        topology_id = create_topology(client, api_url, topo_name, f"Real OCI network data from {region}")
+        topology_id = create_topology(client, api_url, topo_name, f"OCI {region}")
         print(f"  Topology ID: {topology_id}")
 
         print("Importing resources...")
