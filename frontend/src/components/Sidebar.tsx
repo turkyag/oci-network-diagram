@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Network, Cloud, Layers, GitBranch, Shield, Route, Server, Globe, Box, ChevronDown, ChevronRight, MapPin } from 'lucide-react';
-import type { TopologySummary, TopologyDetail } from '@/types/oci';
+import type { TopologySummary, TopologyDetail, DiagramData } from '@/types/oci';
 
 interface SidebarProps {
   topologies: TopologySummary[];
   selectedId: number | null;
   topologyDetail: TopologyDetail | null;
+  diagramData: DiagramData | null;
   loading: boolean;
   onSelect: (id: number) => void;
 }
@@ -14,6 +15,7 @@ export function Sidebar({
   topologies,
   selectedId,
   topologyDetail,
+  diagramData,
   loading,
   onSelect,
 }: SidebarProps) {
@@ -66,7 +68,7 @@ export function Sidebar({
           <div className="spinner" />
         </div>
       ) : topologyDetail ? (
-        <CompartmentTree detail={topologyDetail} />
+        <CompartmentTree detail={topologyDetail} diagramData={diagramData} />
       ) : topologies.length === 0 ? (
         <div className="sidebar-section">
           <div className="sidebar-empty">
@@ -90,22 +92,30 @@ export function Sidebar({
   );
 }
 
-function CompartmentTree({ detail }: { detail: TopologyDetail }) {
+function CompartmentTree({ detail, diagramData }: { detail: TopologyDetail; diagramData: DiagramData | null }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ root: true });
 
   const toggle = (key: string) => {
     setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // Extract compartment names from diagram nodes (which have real names from OCI)
+  const compNames = new Map<string, string>();
+  if (diagramData) {
+    for (const n of diagramData.nodes) {
+      if (n.type === 'compartment' && n.data?.resource_id && n.data?.label) {
+        compNames.set(n.data.resource_id as string, n.data.label as string);
+      }
+    }
+  }
+
   // Group resources by compartment
-  // Since we only have compartment_id on VCNs and DRGs, derive from those
   const compartments = new Map<string, { name: string; resources: ResourceGroup }>();
 
-  // Build compartment map from VCNs
   for (const vcn of detail.vcns) {
     const compId = (vcn as Record<string, unknown>).compartment_id as string || 'unknown';
     if (!compartments.has(compId)) {
-      const name = compId.includes('.tenancy.') ? 'Root Compartment' : `Compartment ...${compId.slice(-8)}`;
+      const name = compNames.get(compId) || (compId.includes('.tenancy.') ? 'Root Compartment' : compId);
       compartments.set(compId, { name, resources: emptyGroup() });
     }
     const group = compartments.get(compId)!;

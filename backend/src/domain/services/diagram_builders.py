@@ -67,9 +67,17 @@ def build_vcns(topo, nodes):
     for r in topo.nsg_rules:
         nsgr_by_nsg.setdefault(r.nsg_id, []).append(r)
 
+    COMP_GAP = 400  # Extra gap between VCNs in different compartments
+
     pos = {}
     x = VCN_X0
+    prev_comp = None
     for v in topo.vcns:
+        # Add extra gap when crossing compartment boundary
+        if prev_comp is not None and v.compartment_id != prev_comp:
+            x += COMP_GAP
+        prev_comp = v.compartment_id
+
         sc = sum(1 for s in topo.subnets if s.vcn_id == v.ocid)
         h = VCN_HDR + max(1, sc) * (SUB_H + SUB_GAP) + VCN_PAD
         nodes.append({"id": v.ocid, "type": "vcn",
@@ -239,12 +247,18 @@ def build_drgs(topo, nodes, edges, vp, analysis):
     ATT_LABELS = {"VCN": "VCN Attach", "IPSEC_TUNNEL": "IPSec Attach",
                   "REMOTE_PEERING_CONNECTION": "RPC Attach", "VIRTUAL_CIRCUIT": "FC Attach"}
 
-    cx = _cx(vp)
+    # Position each DRG above its attached VCN (not globally centered)
     for i, drg in enumerate(topo.drgs):
         atts = [a for a in topo.drg_attachments if a.drg_id == drg.ocid]
         rpcs = [r for r in topo.remote_peering_connections if r.drg_id == drg.ocid]
         dists = [d for d in topo.drg_route_distributions if d.drg_id == drg.ocid]
-        dx = cx - 60 + i * 250
+        # Find the VCN this DRG is attached to and position above it
+        attached_vcn_ids = [a.network_id for a in atts if a.network_type == "VCN" and a.network_id in vp]
+        if attached_vcn_ids:
+            vcn_pos = vp[attached_vcn_ids[0]]
+            dx = vcn_pos["x"] + vcn_pos["width"] // 2 - 60
+        else:
+            dx = _cx(vp) + i * 250
         nodes.append({"id": drg.ocid, "type": "drg",
             "position": {"x": dx, "y": ZONE_DRG_Y},
             "data": {"label": drg.display_name, "resource_id": drg.ocid, "resource_type": "drg",
@@ -306,15 +320,24 @@ def build_drgs(topo, nodes, edges, vp, analysis):
         rpc_seen.add(pair)
         edges.append(edge(f"edge-rpc-peer-{pair[0]}-{pair[1]}", pair[0], pair[1],
                           "RPC Peering", "#7c3aed", animated=True, dashed=True, bidirectional=True))
-    # DRG route table nodes — linked to their parent DRG
-    cx2 = _cx(vp)
+    # DRG route table nodes — positioned near their parent DRG
     att_map = {a.ocid: a for a in topo.drg_attachments}
+    # Find DRG node positions for placement
+    drg_node_pos = {}
+    for n in nodes:
+        if n["type"] == "drg":
+            drg_node_pos[n["id"]] = n["position"]
+    drg_drt_count: dict[str, int] = {}
     for idx, df in enumerate(analysis.drg_flows):
         drt = next((rt for rt in topo.drg_route_tables if rt.ocid == df.route_table_ocid), None)
         if not drt:
             continue
         ecmp = drt.is_ecmp_enabled
-        dx = cx2 + 200 + idx * 180
+        # Position next to parent DRG
+        drg_pos = drg_node_pos.get(df.drg_ocid, {"x": 500, "y": ZONE_DRG_Y})
+        drt_idx = drg_drt_count.get(df.drg_ocid, 0)
+        drg_drt_count[df.drg_ocid] = drt_idx + 1
+        dx = drg_pos["x"] + 200 + drt_idx * 200
         nodes.append({"id": df.route_table_ocid, "type": "drgRouteTable",
             "position": {"x": dx, "y": ZONE_DRG_Y + 10},
             "data": {"label": df.route_table_name, "resource_id": df.route_table_ocid,
@@ -389,26 +412,29 @@ def build_compartments(topo, nodes, vp):
         return {}
 
     # Map each non-external, non-child node to its compartment
-    # VCNs and DRGs have compartment_id. Other nodes inherit from their VCN.
     vcn_comp = {v.ocid: v.compartment_id for v in topo.vcns}
+    drg_comp = {d.ocid: d.compartment_id for d in topo.drgs}
+    # DRG route tables inherit compartment from their parent DRG
+    drt_comp = {rt.ocid: drg_comp.get(rt.drg_id, "") for rt in topo.drg_route_tables}
+
     node_to_comp: dict[str, str] = {}
     for n in nodes:
         if n["type"] in ("external", "compartment") or n.get("parentId"):
             continue
-        # Try to find compartment from properties or VCN parent
         props = n.get("data", {}).get("properties", {})
         cid = props.get("compartment_id", "")
-        if not cid:
-            # Inherit from first comp_id as fallback
-            cid = next(iter(comp_ids), "")
-        if cid:
+        # For DRG route tables, inherit from parent DRG
+        if not cid and n["type"] == "drgRouteTable":
+            cid = drt_comp.get(n["id"], "")
+        # Skip nodes with no compartment — don't fall back to root
+        if cid and cid in comp_ids:
             node_to_comp[n["id"]] = cid
 
     WIDTH_EST = {
         "vcn": lambda n: n.get("style", {}).get("width", 700),
         "drg": lambda _: 200,
-        "drgRouteTable": lambda n: max(220, len(n["data"].get("label", "")) * 6 + 60),
-        "routeTable": lambda n: max(180, len(n["data"].get("label", "")) * 6 + 60),
+        "drgRouteTable": lambda _: 200,
+        "routeTable": lambda _: 200,
         "gateway": lambda _: 160, "loadBalancer": lambda _: 180,
         "connectivity": lambda _: 180, "firewall": lambda _: 180, "lpg": lambda _: 170,
     }

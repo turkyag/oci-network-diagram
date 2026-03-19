@@ -47,6 +47,7 @@ export default function App() {
         topologies={topologies}
         selectedId={selectedId}
         topologyDetail={topologyDetail}
+        diagramData={diagramData}
         loading={loading}
         onSelect={selectTopology}
       />
