@@ -25,11 +25,18 @@ class DiagramService:
         nodes: list[dict] = []
         edges: list[dict] = []
 
-        vp = build_vcns(topology, nodes)
+        # 1. Build compartments FIRST — they are group containers
+        comp_nodes, comp_positions = build_compartments(topology)
+        nodes.extend(comp_nodes)
+
+        # 2. Build VCNs inside compartments (with parentId)
+        vp = build_vcns(topology, nodes, comp_positions)
+
+        # 3. Everything else — pass comp_positions for parentId nesting
         build_subnets(topology, nodes, vp, analysis)
-        build_gateways(topology, nodes, edges, vp, analysis)
-        build_drgs(topology, nodes, edges, vp, analysis)
-        build_route_tables(topology, nodes, edges, vp, analysis, emap)
+        build_gateways(topology, nodes, edges, vp, analysis, comp_positions)
+        build_drgs(topology, nodes, edges, vp, analysis, comp_positions)
+        build_route_tables(topology, nodes, edges, vp, analysis, emap, comp_positions)
         build_load_balancers(topology, nodes, edges, vp)
         self._build_lpgs(topology, nodes, edges, vp)
         self._build_connectivity(topology, nodes, edges, vp)
@@ -37,8 +44,6 @@ class DiagramService:
         # Build externals AFTER gateways/connectivity so they align above them
         build_externals(topology, nodes, vp)
         self._build_external_edges(topology, nodes, edges)
-        # Build compartments LAST — they wrap VCNs as background containers
-        build_compartments(topology, nodes, vp)
 
         return {
             "nodes": nodes,

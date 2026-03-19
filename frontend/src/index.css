@@ -1060,18 +1060,16 @@ code, .mono {
   min-width: 100%;
   min-height: 100%;
   position: relative;
-  border: 1px solid rgba(71, 85, 105, 0.22);
-  border-radius: 8px;
-  background: none;
-  pointer-events: none;
+  border: 1.5px solid rgba(71, 85, 105, 0.25);
+  border-radius: 10px;
+  background: rgba(15, 20, 30, 0.15);
 }
 
 /* Subtle inner edge highlight */
 .compartment-border-accent {
   position: absolute;
   inset: 0;
-  pointer-events: none;
-  border-radius: 8px;
+  border-radius: 10px;
   pointer-events: none;
   background:
     linear-gradient(180deg, rgba(30, 41, 59, 0.12) 0%, transparent 40px);
@@ -1090,7 +1088,6 @@ code, .mono {
   border: 1px solid rgba(71, 85, 105, 0.3);
   border-bottom: 1px solid var(--bg-surface);
   border-radius: 5px 5px 0 0;
-  pointer-events: auto;
   cursor: grab;
   z-index: 10;
   user-select: none;
