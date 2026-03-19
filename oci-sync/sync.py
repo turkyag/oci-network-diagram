@@ -39,22 +39,31 @@ def _discover_compartments(config: dict, tenancy_id: str, root_compartment_id: s
 
     all_ids = [root_compartment_id]
 
-    try:
-        compartments = _list_all(
-            identity.list_compartments, root_compartment_id,
-            compartment_id_in_subtree=True,
-            access_level="ACCESSIBLE",
-        )
-        for c in compartments:
-            if getattr(c, "lifecycle_state", "") == "ACTIVE":
-                all_ids.append(c.id)
-                comp_map[c.id] = {
-                    "name": c.name or c.id[-8:],
-                    "parent_id": c.compartment_id or root_compartment_id,
-                }
-                print(f"    {c.name} ({c.id[-12:]}...)")
-    except oci.exceptions.ServiceError as e:
-        print(f"  Warning: Could not list sub-compartments: {e.message[:80]}")
+    # Try listing compartments from the tenancy root (not the passed compartment)
+    # Some setups require listing from tenancy even if a sub-compartment was passed
+    list_from = tenancy_id if tenancy_id else root_compartment_id
+    for attempt_root in [list_from, root_compartment_id]:
+        try:
+            compartments = _list_all(
+                identity.list_compartments, attempt_root,
+                compartment_id_in_subtree=True,
+                access_level="ACCESSIBLE",
+            )
+            for c in compartments:
+                if getattr(c, "lifecycle_state", "") == "ACTIVE":
+                    if c.id not in comp_map:
+                        all_ids.append(c.id)
+                    comp_map[c.id] = {
+                        "name": c.name or c.id[-8:],
+                        "parent_id": c.compartment_id or root_compartment_id,
+                    }
+                    print(f"    {c.name} ({c.id[-12:]}...)")
+            if len(all_ids) > 1:
+                break  # found sub-compartments, no need for second attempt
+        except oci.exceptions.ServiceError as e:
+            print(f"  Warning: Could not list compartments from {attempt_root[:30]}...: {e.message[:80]}")
+        except Exception as e:
+            print(f"  Warning: Compartment discovery error: {e}")
 
     return all_ids, comp_map
 
@@ -67,6 +76,12 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
     print("  Discovering compartments...")
     compartment_ids, comp_map = _discover_compartments(config, tenancy_id, compartment_id)
     print(f"  Found {len(compartment_ids)} compartment(s)")
+    if len(compartment_ids) <= 1:
+        print(f"  WARNING: Only root compartment found. If you have sub-compartments,")
+        print(f"  ensure your API key has 'inspect' permission on the tenancy.")
+    for cid in compartment_ids:
+        meta = comp_map.get(cid, {})
+        print(f"    - {meta.get('name', cid[-12:])} ({cid[-12:]}...)")
 
     vn_client = oci.core.VirtualNetworkClient(config)
     lb_client = oci.load_balancer.LoadBalancerClient(config)
@@ -75,10 +90,24 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
     payload = _empty_payload()
 
     # Fetch VCNs across ALL compartments
-    print("  Fetching VCNs...")
+    print(f"  Fetching VCNs (across {len(compartment_ids)} compartments)...")
     vcns = []
     for cid in compartment_ids:
-        vcns.extend(_list_all(vn_client.list_vcns, cid))
+        found = _list_all(vn_client.list_vcns, cid)
+        if found:
+            print(f"    Found {len(found)} VCN(s) in compartment ...{cid[-8:]}")
+        vcns.extend(found)
+
+    # Fallback: if no VCNs found, try subtree search from tenancy root
+    if not vcns and tenancy_id:
+        print("  No VCNs found per-compartment, trying subtree search...")
+        try:
+            vcns = _list_all(vn_client.list_vcns, tenancy_id)
+            if vcns:
+                print(f"    Found {len(vcns)} VCN(s) via subtree search")
+        except oci.exceptions.ServiceError:
+            pass
+
     for v in vcns:
         payload["vcns"].append(_vcn(v))
 
