@@ -490,9 +490,11 @@ def build_compartments(topo, nodes, vp):
                 "resource_id": comp_id,
                 "properties": {"compartment_id": comp_id, "compartment_name": comp_name}
             },
-            "style": {"width": comp_w, "height": comp_h, "zIndex": -1},
+            "style": {"width": comp_w, "height": comp_h},
+            "zIndex": 0,
             "selectable": True,
             "draggable": True,
+            "dragHandle": ".compartment-tab",
         })
         compartment_positions[comp_id] = {"x": min_x, "y": min_y, "width": comp_w, "height": comp_h}
 

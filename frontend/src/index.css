@@ -1063,12 +1063,14 @@ code, .mono {
   border: 1px solid rgba(71, 85, 105, 0.22);
   border-radius: 8px;
   background: none;
+  pointer-events: none;
 }
 
-/* Subtle inner edge highlight — just the corners feel defined */
+/* Subtle inner edge highlight */
 .compartment-border-accent {
   position: absolute;
   inset: 0;
+  pointer-events: none;
   border-radius: 8px;
   pointer-events: none;
   background:
@@ -1078,17 +1080,24 @@ code, .mono {
 /* Tab-style label at top-left corner */
 .compartment-tab {
   position: absolute;
-  top: -18px;
+  top: -22px;
   left: 14px;
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 10px 3px 7px;
-  background: var(--bg-deep);
-  border: 1px solid rgba(71, 85, 105, 0.22);
-  border-bottom: 1px solid var(--bg-deep);
-  border-radius: 4px 4px 0 0;
+  padding: 4px 12px 4px 8px;
+  background: var(--bg-surface);
+  border: 1px solid rgba(71, 85, 105, 0.3);
+  border-bottom: 1px solid var(--bg-surface);
+  border-radius: 5px 5px 0 0;
   pointer-events: auto;
+  cursor: grab;
+  z-index: 10;
+  user-select: none;
+}
+
+.compartment-tab:active {
+  cursor: grabbing;
 }
 
 .compartment-tab-icon {
