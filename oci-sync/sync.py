@@ -24,52 +24,92 @@ import oci
 # OCI data fetching
 # ---------------------------------------------------------------------------
 
+def _get_all_compartment_ids(config: dict, tenancy_id: str, root_compartment_id: str) -> list[str]:
+    """Recursively list all compartments under the given root (including the root itself)."""
+    identity = oci.identity.IdentityClient(config)
+    all_ids = [root_compartment_id]
+
+    try:
+        compartments = _list_all(
+            identity.list_compartments, root_compartment_id,
+            compartment_id_in_subtree=True,
+            access_level="ACCESSIBLE",
+        )
+        for c in compartments:
+            if getattr(c, "lifecycle_state", "") == "ACTIVE":
+                all_ids.append(c.id)
+    except oci.exceptions.ServiceError as e:
+        print(f"  Warning: Could not list sub-compartments: {e.message[:80]}")
+
+    return all_ids
+
+
 def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
-    """Fetch all network resources from OCI for the given compartment."""
+    """Fetch all network resources from OCI across all sub-compartments."""
+    tenancy_id = config.get("tenancy", compartment_id)
+
+    # Discover all compartments (root + children recursively)
+    print("  Discovering compartments...")
+    compartment_ids = _get_all_compartment_ids(config, tenancy_id, compartment_id)
+    print(f"  Found {len(compartment_ids)} compartment(s)")
+
     vn_client = oci.core.VirtualNetworkClient(config)
     lb_client = oci.load_balancer.LoadBalancerClient(config)
     nlb_client = oci.network_load_balancer.NetworkLoadBalancerClient(config)
 
     payload = _empty_payload()
 
+    # Fetch VCNs across ALL compartments
     print("  Fetching VCNs...")
-    vcns = _list_all(vn_client.list_vcns, compartment_id)
+    vcns = []
+    for cid in compartment_ids:
+        vcns.extend(_list_all(vn_client.list_vcns, cid))
     for v in vcns:
         payload["vcns"].append(_vcn(v))
 
     vcn_ids = [v.id for v in vcns]
 
+    # Build VCN → compartment map for VCN-scoped queries
+    vcn_comp = {v.id: v.compartment_id for v in vcns}
+
     print("  Fetching Subnets...")
     for vcn_id in vcn_ids:
-        for s in _list_all(vn_client.list_subnets, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for s in _list_all(vn_client.list_subnets, cid, vcn_id=vcn_id):
             payload["subnets"].append(_subnet(s))
 
     print("  Fetching Internet Gateways...")
     for vcn_id in vcn_ids:
-        for g in _list_all(vn_client.list_internet_gateways, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for g in _list_all(vn_client.list_internet_gateways, cid, vcn_id=vcn_id):
             payload["internet_gateways"].append(_igw(g))
 
     print("  Fetching NAT Gateways...")
     for vcn_id in vcn_ids:
-        for g in _list_all(vn_client.list_nat_gateways, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for g in _list_all(vn_client.list_nat_gateways, cid, vcn_id=vcn_id):
             payload["nat_gateways"].append(_nat(g))
 
     print("  Fetching Service Gateways...")
     for vcn_id in vcn_ids:
-        for g in _list_all(vn_client.list_service_gateways, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for g in _list_all(vn_client.list_service_gateways, cid, vcn_id=vcn_id):
             payload["service_gateways"].append(_sgw(g))
 
     print("  Fetching DRGs...")
-    drgs = _list_all(vn_client.list_drgs, compartment_id)
+    drgs = []
+    for cid in compartment_ids:
+        drgs.extend(_list_all(vn_client.list_drgs, cid))
     for d in drgs:
         payload["drgs"].append(_drg(d))
 
     drg_ids = [d.id for d in drgs]
 
     print("  Fetching DRG Attachments...")
-    for drg_id in drg_ids:
-        for a in _list_all(vn_client.list_drg_attachments, compartment_id, drg_id=drg_id):
-            payload["drg_attachments"].append(_drg_attachment(a))
+    for cid in compartment_ids:
+        for drg_id in drg_ids:
+            for a in _list_all(vn_client.list_drg_attachments, cid, drg_id=drg_id):
+                payload["drg_attachments"].append(_drg_attachment(a))
 
     print("  Fetching DRG Route Tables...")
     for drg_id in drg_ids:
@@ -84,18 +124,20 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
                 pass
 
     print("  Fetching Remote Peering Connections...")
-    for drg_id in drg_ids:
-        try:
-            rpcs = _list_all(vn_client.list_remote_peering_connections, compartment_id, drg_id=drg_id)
-            for r in rpcs:
-                payload["remote_peering_connections"].append(_rpc(r))
-        except oci.exceptions.ServiceError:
-            pass
+    for cid in compartment_ids:
+        for drg_id in drg_ids:
+            try:
+                rpcs = _list_all(vn_client.list_remote_peering_connections, cid, drg_id=drg_id)
+                for r in rpcs:
+                    payload["remote_peering_connections"].append(_rpc(r))
+            except oci.exceptions.ServiceError:
+                pass
 
     print("  Fetching Local Peering Gateways...")
     for vcn_id in vcn_ids:
+        cid = vcn_comp.get(vcn_id, compartment_id)
         try:
-            lpgs = _list_all(vn_client.list_local_peering_gateways, compartment_id, vcn_id=vcn_id)
+            lpgs = _list_all(vn_client.list_local_peering_gateways, cid, vcn_id=vcn_id)
             for l in lpgs:
                 payload["local_peering_gateways"].append(_lpg(l))
         except oci.exceptions.ServiceError:
@@ -103,14 +145,16 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
 
     print("  Fetching Route Tables...")
     for vcn_id in vcn_ids:
-        for rt in _list_all(vn_client.list_route_tables, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for rt in _list_all(vn_client.list_route_tables, cid, vcn_id=vcn_id):
             payload["route_tables"].append(_route_table(rt))
             for rule in (rt.route_rules or []):
                 payload["route_rules"].append(_route_rule(rt.id, rule))
 
     print("  Fetching Security Lists...")
     for vcn_id in vcn_ids:
-        for sl in _list_all(vn_client.list_security_lists, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for sl in _list_all(vn_client.list_security_lists, cid, vcn_id=vcn_id):
             payload["security_lists"].append(_security_list(sl))
             for rule in (sl.ingress_security_rules or []):
                 payload["security_rules"].append(_security_rule(sl.id, "INGRESS", rule))
@@ -118,56 +162,64 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
                 payload["security_rules"].append(_security_rule(sl.id, "EGRESS", rule))
 
     print("  Fetching Network Security Groups...")
-    for vcn_id in vcn_ids:
-        for nsg in _list_all(vn_client.list_network_security_groups, compartment_id=compartment_id, vcn_id=vcn_id):
-            payload["network_security_groups"].append(_nsg(nsg))
+    for cid in compartment_ids:
+        for vcn_id in vcn_ids:
             try:
-                nsg_rules = _list_all(vn_client.list_network_security_group_security_rules, nsg.id)
-                for r in nsg_rules:
-                    payload["nsg_rules"].append(_nsg_rule(nsg.id, r))
+                for nsg in _list_all(vn_client.list_network_security_groups, compartment_id=cid, vcn_id=vcn_id):
+                    payload["network_security_groups"].append(_nsg(nsg))
+                    try:
+                        nsg_rules = _list_all(vn_client.list_network_security_group_security_rules, nsg.id)
+                        for r in nsg_rules:
+                            payload["nsg_rules"].append(_nsg_rule(nsg.id, r))
+                    except oci.exceptions.ServiceError:
+                        pass
             except oci.exceptions.ServiceError:
                 pass
 
     print("  Fetching Load Balancers...")
-    try:
-        for lb in _list_all(lb_client.list_load_balancers, compartment_id=compartment_id):
-            payload["load_balancers"].append(_lb(lb))
-    except oci.exceptions.ServiceError:
-        pass
-
-    print("  Fetching Network Load Balancers...")
-    try:
-        for nlb in _list_all(nlb_client.list_network_load_balancers, compartment_id=compartment_id):
-            payload["network_load_balancers"].append(_nlb(nlb))
-    except oci.exceptions.ServiceError:
-        pass
-
-    print("  Fetching IPSec Connections...")
-    for drg_id in drg_ids:
+    for cid in compartment_ids:
         try:
-            conns = _list_all(vn_client.list_ip_sec_connections, compartment_id, drg_id=drg_id)
-            for c in conns:
-                payload["ipsec_connections"].append(_ipsec(c))
-                # Fetch tunnels
-                try:
-                    tunnels = _list_all(vn_client.list_ip_sec_connection_tunnels, c.id)
-                    for t in tunnels:
-                        payload["ipsec_tunnels"].append(_ipsec_tunnel(c.id, t))
-                except oci.exceptions.ServiceError:
-                    pass
+            for lb in _list_all(lb_client.list_load_balancers, compartment_id=cid):
+                payload["load_balancers"].append(_lb(lb))
         except oci.exceptions.ServiceError:
             pass
 
+    print("  Fetching Network Load Balancers...")
+    for cid in compartment_ids:
+        try:
+            for nlb in _list_all(nlb_client.list_network_load_balancers, compartment_id=cid):
+                payload["network_load_balancers"].append(_nlb(nlb))
+        except oci.exceptions.ServiceError:
+            pass
+
+    print("  Fetching IPSec Connections...")
+    for cid in compartment_ids:
+        for drg_id in drg_ids:
+            try:
+                conns = _list_all(vn_client.list_ip_sec_connections, cid, drg_id=drg_id)
+                for c in conns:
+                    payload["ipsec_connections"].append(_ipsec(c))
+                    try:
+                        tunnels = _list_all(vn_client.list_ip_sec_connection_tunnels, c.id)
+                        for t in tunnels:
+                            payload["ipsec_tunnels"].append(_ipsec_tunnel(c.id, t))
+                    except oci.exceptions.ServiceError:
+                        pass
+            except oci.exceptions.ServiceError:
+                pass
+
     print("  Fetching CPEs...")
-    try:
-        for cpe in _list_all(vn_client.list_cpes, compartment_id):
-            payload["cpes"].append(_cpe(cpe))
-    except oci.exceptions.ServiceError:
-        pass
+    for cid in compartment_ids:
+        try:
+            for cpe in _list_all(vn_client.list_cpes, cid):
+                payload["cpes"].append(_cpe(cpe))
+        except oci.exceptions.ServiceError:
+            pass
 
     print("  Fetching DHCP Options...")
     for vcn_id in vcn_ids:
-        for dh in _list_all(vn_client.list_dhcp_options, compartment_id, vcn_id=vcn_id):
+        cid = vcn_comp.get(vcn_id, compartment_id)
+        for dh in _list_all(vn_client.list_dhcp_options, cid, vcn_id=vcn_id):
             payload["dhcp_options"].append(dict(
                 ocid=dh.id, vcn_id=dh.vcn_id or "", display_name=dh.display_name or "",
                 options=[{"type": getattr(o, "type", ""), "server_type": getattr(o, "server_type", "")} for o in (dh.options or [])],
@@ -180,36 +232,39 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
     try:
         nfw_mod = __import__("oci.network_firewall", fromlist=["NetworkFirewallClient"])
         nfw_client = nfw_mod.NetworkFirewallClient(config)
-        for nf in _list_all(nfw_client.list_network_firewalls, compartment_id=compartment_id):
-            fw_subnet_id = getattr(nf, "subnet_id", "") or ""
-            payload["network_firewalls"].append(dict(
-                ocid=nf.id, display_name=nf.display_name or "",
-                subnet_id=fw_subnet_id,
-                vcn_id=subnet_vcn.get(fw_subnet_id, ""),
-                policy_id=getattr(nf, "network_firewall_policy_id", "") or "",
-                ip_addresses=[ip for ip in (getattr(nf, "ipv4_address", None) and [nf.ipv4_address] or [])],
-                lifecycle_state=getattr(nf, "lifecycle_state", "") or "",
-            ))
+        for cid in compartment_ids:
+            for nf in _list_all(nfw_client.list_network_firewalls, compartment_id=cid):
+                fw_subnet_id = getattr(nf, "subnet_id", "") or ""
+                payload["network_firewalls"].append(dict(
+                    ocid=nf.id, display_name=nf.display_name or "",
+                    subnet_id=fw_subnet_id,
+                    vcn_id=subnet_vcn.get(fw_subnet_id, ""),
+                    policy_id=getattr(nf, "network_firewall_policy_id", "") or "",
+                    ip_addresses=[ip for ip in (getattr(nf, "ipv4_address", None) and [nf.ipv4_address] or [])],
+                    lifecycle_state=getattr(nf, "lifecycle_state", "") or "",
+                ))
     except Exception as e:
         print(f"    Skipped (not available or no permissions): {e}")
 
     print("  Fetching Public IPs...")
-    try:
-        for pip in _list_all(vn_client.list_public_ips, scope="REGION", compartment_id=compartment_id):
-            payload["public_ips"].append(dict(
-                ocid=pip.id, display_name=pip.display_name or "",
-                ip_address=pip.ip_address or "",
-                lifetime=pip.lifetime or "",
-                assigned_entity_id=pip.assigned_entity_id or "",
-                assigned_entity_type=pip.assigned_entity_type or "",
-                compartment_id=pip.compartment_id or "",
-            ))
-    except oci.exceptions.ServiceError:
-        pass
+    for cid in compartment_ids:
+        try:
+            for pip in _list_all(vn_client.list_public_ips, scope="REGION", compartment_id=cid):
+                payload["public_ips"].append(dict(
+                    ocid=pip.id, display_name=pip.display_name or "",
+                    ip_address=pip.ip_address or "",
+                    lifetime=pip.lifetime or "",
+                    assigned_entity_id=pip.assigned_entity_id or "",
+                    assigned_entity_type=pip.assigned_entity_type or "",
+                    compartment_id=pip.compartment_id or "",
+                ))
+        except oci.exceptions.ServiceError:
+            pass
 
     print("  Fetching Cross-Connects...")
-    try:
-        for cc in _list_all(vn_client.list_cross_connects, compartment_id):
+    for cid in compartment_ids:
+      try:
+        for cc in _list_all(vn_client.list_cross_connects, cid):
             payload["cross_connects"].append(dict(
                 ocid=cc.id, display_name=cc.display_name or "",
                 compartment_id=cc.compartment_id or "",
@@ -218,12 +273,13 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
                 cross_connect_group_id=getattr(cc, "cross_connect_group_id", "") or "",
                 lifecycle_state=getattr(cc, "lifecycle_state", "") or "",
             ))
-    except oci.exceptions.ServiceError:
+      except oci.exceptions.ServiceError:
         pass
 
     print("  Fetching Virtual Circuits...")
-    try:
-        for vc in _list_all(vn_client.list_virtual_circuits, compartment_id):
+    for cid in compartment_ids:
+      try:
+        for vc in _list_all(vn_client.list_virtual_circuits, cid):
             payload["virtual_circuits"].append(dict(
                 ocid=vc.id, display_name=vc.display_name or "",
                 compartment_id=vc.compartment_id or "",
@@ -235,7 +291,7 @@ def fetch_oci_network_data(config: dict, compartment_id: str) -> dict:
                 region=getattr(vc, "region", "") or "",
                 lifecycle_state=getattr(vc, "lifecycle_state", "") or "",
             ))
-    except oci.exceptions.ServiceError:
+      except oci.exceptions.ServiceError:
         pass
 
     print("  Fetching DRG Route Distributions...")
