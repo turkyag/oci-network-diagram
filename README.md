@@ -115,6 +115,21 @@ Networking, Routing, Security, Peering, VPN, FastConnect, Load Balancing, Firewa
 
 All credential files are gitignored.
 
+## Upgrading
+
+```bash
+./upgrade.sh
+```
+
+Or manually:
+
+```bash
+git pull origin main
+docker compose up -d --build
+```
+
+Database migrations apply automatically on restart. Your OCI data is preserved — no need to re-sync unless the schema changed significantly.
+
 ## Stopping
 
 ```bash

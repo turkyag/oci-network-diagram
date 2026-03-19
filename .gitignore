@@ -10,6 +10,7 @@ pgdata/
 *.png
 *.jpg
 .playwright-mcp/
+CLAUDE.md
 
 # OCI credentials (never commit)
 oci-config
